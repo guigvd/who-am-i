@@ -746,7 +746,7 @@ function vPlay(S2){
     +'<div class="status"><div class="who"><h3>Vez de adivinhar</h3><b>'+(isG?"Sua vez!":gname)+'</b></div></div>';
   var main;
   if(isG){
-    main='<div class="card q'+fl+'"><span class="cat">'+esc(S2.wt)+'</span><div class="word" aria-label="Palavra escondida">?</div><p class="hint">Seus amigos estão vendo a palavra. Faça perguntas e arrisque!</p></div>'
+    main='<div class="card q'+fl+'"><div class="word" aria-label="Palavra escondida">?</div><p class="hint">Seus amigos estão vendo a palavra. Faça perguntas e arrisque!</p></div>'
       +'<div class="acts one"><button class="btn pass xl" data-a="pass">Passar</button></div>';
   }else{
     var hint=A.mode==="local"?"Celular na testa de "+gname+". Dê dicas sem falar a palavra.":"Dê dicas para "+gname+" sem falar a palavra.";

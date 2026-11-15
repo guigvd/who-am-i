@@ -159,6 +159,7 @@ details.how ol{margin:10px 0 0;padding-left:20px;display:flex;flex-direction:col
   .timer .prog,.btn{transition:none}
 }
 
+.banner.ok{background:var(--hit);color:var(--hit-ink)}
 body{margin:0;min-height:100vh}
 </style>
 </head>
@@ -233,14 +234,13 @@ function plural(n,a,b){return n===1?a:b;}
 var saved=store.get("cfg",null)||{};
 var A={
   screen:"home",mode:null,host:false,R:sb?1:null,ch:null,code:"",peers:[],st:null,
-  local:[],aw:[],err:"",busy:"",conn:true,hostGone:false,hostSeen:false,lastSt:0,confirmLeave:false,
+  local:[],aw:[],err:"",busy:"",conn:true,hostGone:false,hostSeen:false,lastSt:0,confirmLeave:false,confirmEnd:false,
   name:store.get("name",""),codeIn:"",edit:null,lastKey:"",lock:0,
   my:store.get("themes",[]),
-  cfg:{th:Array.isArray(saved.th)?saved.th:["famosos-br","filmes","animais","comidas"],t:+saved.t||60,r:+saved.r||2,pg:saved.pg?1:0}
+  cfg:{th:Array.isArray(saved.th)?saved.th:["famosos-br","filmes","animais","comidas"],pg:saved.pg?1:0}
 };
 var S=null;             // estado do jogo (somente anfitrião)
 var G=null;             // motor do anfitrião
-var CIRC=188.5;
 
 function allThemes(){return BUILTIN.concat(A.my.map(function(t){return {id:t.id,name:t.name,words:t.words};}));}
 function nick(){return (A.name||"").trim().slice(0,14)||"Jogador";}
@@ -301,7 +301,16 @@ function onSt(ch,p){
 function onSync(ch){
   if(ch!==A.ch)return;
   A.peers=readPeers(ch);
-  if(A.host&&G){clearTimeout(G.t3);G.t3=setTimeout(function(){if(S)pub({});},80);return;}
+  if(A.host&&G){clearTimeout(G.t3);G.t3=setTimeout(function(){
+    if(!S)return;
+    if(S.v==="play"&&A.mode==="online"&&presentList().indexOf(S.g)<0){
+      clearTimeout(G.t4);
+      G.t4=setTimeout(function(){
+        if(S&&S.v==="play"){var p2=presentList();if(p2.length>=2&&p2.indexOf(S.g)<0)skipAbsent();}
+      },5000);
+    }
+    pub({});
+  },80);return;}
   if(A.hostSeen){
     var hasHost=A.peers.some(function(p){return p.role==="host";});
     if(hasHost){clearTimeout(A.gt);A.gt=null;}
@@ -347,14 +356,14 @@ async function dropChannel(){
 }
 
 /* ---------- Motor do anfitrião ---------- */
-function newState(){return {v:"lobby",hu:UID,g:"",w:"",wt:"",k:1,tl:0,cd:0,ti:0,tt:0,pl:[],cfg:{th:[],t:60,r:2,pg:0},h:[],ts:0,lf:-1,cw:0};}
+function newState(){return {v:"lobby",hu:UID,g:"",w:"",wt:"",k:1,pl:[],cfg:{th:[],pg:0},lf:-1,lm:"",cw:0};}
 function initHost(){
-  G={order:[],known:{},sc:{},pool:[],pi:0,hist:[],seen:{},crowd:{},off:0,end:0,t1:null,t2:null,t3:null};
+  G={order:[],known:{},sc:{},pool:[],pi:0,seen:{},crowd:{},t3:null,t4:null};
   S=newState();
-  S.cfg={th:themeNames(),t:A.cfg.t,r:A.cfg.r,pg:A.cfg.pg};
+  S.cfg={th:themeNames(),pg:A.cfg.pg};
   pub({});
 }
-function clearTimers(){if(!G)return;clearInterval(G.t1);clearInterval(G.t2);clearTimeout(G.t3);}
+function clearTimers(){if(!G)return;clearTimeout(G.t3);clearTimeout(G.t4);}
 function playersNow(){
   if(A.mode==="local")return A.local.map(function(p){return {u:p.u,n:p.n,c:p.c};});
   var seen={},out=[];
@@ -371,7 +380,6 @@ function presentList(){var on={};playersNow().forEach(function(p){on[p.u]=1;});r
 function pub(patch){
   Object.assign(S,patch);
   S.pl=buildPl();S.cw=crowdWords().length;
-  if(JSON.stringify(S).length>3600&&S.h.length>10)S.h=S.h.slice(-10);
   A.st=JSON.parse(JSON.stringify(S));
   if(A.mode==="online")bsend("st",A.st);
   render();
@@ -380,64 +388,57 @@ function pickWord(){
   if(G.pi>=G.pool.length){G.pool=shuffle(G.pool);G.pi=0;}
   var x=G.pool[G.pi++];return {w:x[0],wt:x[1]};
 }
+function nameOf(u){return G.known[u]?G.known[u].n:"alguém";}
+function nextGuesser(){
+  var pr=presentList();if(!pr.length)return S.g;
+  var oi=G.order.indexOf(S.g),n=G.order.length;
+  for(var i=1;i<=n;i++){var u=G.order[(oi+i+n)%n];if(pr.indexOf(u)>=0)return u;}
+  return pr[0];
+}
 function startGame(){
   var now=playersNow(),pool=buildPool();
   if(now.length<2)return toast("Precisa de pelo menos 2 jogadores.");
   if(pool.length<8)return toast("Escolha temas com pelo menos 8 palavras.");
-  clearTimers();G.pool=shuffle(pool);G.pi=0;G.sc={};G.off=Math.floor(Math.random()*now.length);
-  buildPl();var pr=presentList();
-  pub({v:"ready",ti:0,tt:A.cfg.r*pr.length,g:pr[G.off%pr.length],k:S.k+1,h:[],ts:0,lf:-1,w:"",wt:"",cfg:{th:themeNames(),t:A.cfg.t,r:A.cfg.r,pg:A.cfg.pg}});
-}
-function beginCountdown(){
-  if(S.v!=="ready")return;
-  clearTimers();var c=3;
-  pub({v:"cd",cd:c,w:"",wt:"",k:S.k+1});
-  G.t1=setInterval(function(){
-    c--;
-    if(c>0)pub({cd:c});
-    else{clearInterval(G.t1);beginPlay();}
-  },1000);
-}
-function beginPlay(){
-  var W=pickWord();G.end=Date.now()+S.cfg.t*1000;G.hist=[];G.ts=0;
+  clearTimers();G.pool=shuffle(pool);G.pi=0;G.sc={};
   try{if(navigator.wakeLock)navigator.wakeLock.request("screen").catch(function(){});}catch(e){}
-  pub({v:"play",w:W.w,wt:W.wt,k:S.k+1,tl:S.cfg.t,h:[],ts:0,lf:-1,cd:0});
-  G.t2=setInterval(function(){
-    var left=Math.max(0,Math.ceil((G.end-Date.now())/1000));
-    if(left<=0)return endTurn();
-    if(left!==S.tl)pub({tl:left});
-  },250);
+  buildPl();var pr=presentList(),g=pr[Math.floor(Math.random()*pr.length)];
+  var patch={g:g,k:S.k+1,lf:-1,lm:"",cfg:{th:themeNames(),pg:A.cfg.pg}};
+  if(A.mode==="local"){patch.v="ready";patch.w="";patch.wt="";}
+  else{var W=pickWord();patch.v="play";patch.w=W.w;patch.wt=W.wt;}
+  pub(patch);
 }
-function endTurn(){
-  clearTimers();
-  pub({v:"result",w:"",wt:"",k:S.k+1,tl:0,h:G.hist.slice(-30),ts:G.ts,lf:-1});
+function startTurn(){
+  if(S.v!=="ready")return;
+  var W=pickWord();pub({v:"play",w:W.w,wt:W.wt,k:S.k+1,lf:-1,lm:""});
+}
+function turnPatch(nx,msg,lf){
+  var p={g:nx,k:S.k+1,lf:lf,lm:msg};
+  if(A.mode==="local"){p.v="ready";p.w="";p.wt="";}
+  else{var W=pickWord();p.w=W.w;p.wt=W.wt;}
+  return p;
 }
 function doHit(){
   if(S.v!=="play")return;
-  G.sc[S.g]=(G.sc[S.g]||0)+1;G.ts++;G.hist.push([S.w.slice(0,32),1]);
-  var W=pickWord();pub({w:W.w,wt:W.wt,k:S.k+1,ts:G.ts,lf:1});
+  var prev=S.g;G.sc[prev]=(G.sc[prev]||0)+1;
+  var nx=nextGuesser();
+  pub(turnPatch(nx,nameOf(prev)+" acertou! Agora é a vez de "+nameOf(nx)+".",1));
 }
 function doPass(){
   if(S.v!=="play")return;
-  G.hist.push([S.w.slice(0,32),0]);
-  var W=pickWord();pub({w:W.w,wt:W.wt,k:S.k+1,ts:G.ts,lf:0});
+  var W=pickWord();pub({w:W.w,wt:W.wt,k:S.k+1,lf:0,lm:""});
 }
-function nextTurn(){
-  if(S.v!=="result")return;
-  var ti=S.ti+1,pr=presentList();
-  if(ti>=S.tt||pr.length<2)return pub({v:"end",k:S.k+1,w:"",wt:""});
-  pub({v:"ready",ti:ti,g:pr[(ti+G.off)%pr.length],k:S.k+1,h:[],ts:0,lf:-1});
+function skipAbsent(){
+  var prev=S.g,nx=nextGuesser();
+  pub(turnPatch(nx,nameOf(prev)+" saiu da sala. Agora é a vez de "+nameOf(nx)+".",0));
 }
-function playAgain(){clearTimers();G.sc={};pub({v:"lobby",ti:0,tt:0,g:"",k:S.k+1,h:[],ts:0,lf:-1,w:"",wt:""});}
-function finishNow(){clearTimers();pub({v:"end",k:S.k+1,w:"",wt:"",h:[],ts:0});}
+function finishNow(){clearTimers();A.confirmEnd=false;pub({v:"end",k:S.k+1,w:"",wt:"",lm:"",lf:-1});}
+function playAgain(){clearTimers();G.sc={};pub({v:"lobby",g:"",k:S.k+1,w:"",wt:"",lm:"",lf:-1});}
 function handleRemote(a){
   if(!a||typeof a!=="object"||a.k!==S.k||!a.x)return;
   if(G.seen[a.x])return;G.seen[a.x]=1;
   var u=a.u;
   if(a.t==="hit"){if(S.v==="play"&&u!==S.g)doHit();}
   else if(a.t==="pass"){if(S.v==="play"&&(!S.cfg.pg||u===S.g))doPass();}
-  else if(a.t==="start"){if(S.v==="ready"&&u===S.g)beginCountdown();}
-  else if(a.t==="next"){if(S.v==="result")nextTurn();}
 }
 function sendAct(t){
   if(!A.st)return;
@@ -514,7 +515,7 @@ async function leave(){
 function persistCfg(){store.set("cfg",A.cfg);}
 function cfgChanged(){
   persistCfg();
-  if(A.host&&S&&S.v==="lobby")pub({cfg:{th:themeNames(),t:A.cfg.t,r:A.cfg.r,pg:A.cfg.pg}});else render();
+  if(A.host&&S&&S.v==="lobby")pub({cfg:{th:themeNames(),pg:A.cfg.pg}});else render();
 }
 function addWord(){
   var el=$("#aw");if(!el)return;var w=clean(el.value);if(!w)return;
@@ -566,7 +567,7 @@ async function copyText(txt,msg){
 function roomLink(){return location.href.split("#")[0]+"#sala-"+A.code;}
 function act(a,el){
   var d=el?el.dataset:{};
-  if(a==="hit"||a==="pass"||a==="start"||a==="next"){
+  if(a==="hit"||a==="pass"||a==="start"){
     if(A.lock>Date.now())return;A.lock=Date.now()+300;
   }
   A.err=a==="saveth"?A.err:"";
@@ -589,18 +590,17 @@ function act(a,el){
     case "th":return toggleTheme(d.id);
     case "thall":A.cfg.th=allThemes().map(function(t){return t.id;}).concat(A.mode==="online"?["crowd"]:[]);return cfgChanged();
     case "thnone":A.cfg.th=[];return cfgChanged();
-    case "time":A.cfg.t=+d.v;return cfgChanged();
-    case "rounds":A.cfg.r=+d.v;return cfgChanged();
     case "pg":A.cfg.pg=A.cfg.pg?0:1;return cfgChanged();
     case "addw":return addWord();
     case "rmw":A.aw.splice(+d.i,1);shareWords();return render();
     case "addlp":return addLocalPlayer();
     case "rmlp":A.local.splice(+d.i,1);if(S&&S.v==="lobby")pub({});else render();return;
     case "go":return startGame();
-    case "start":return A.host?beginCountdown():sendAct("start");
+    case "start":return startTurn();
     case "hit":if(A.host){if(S.g!==UID||A.mode==="local")doHit();}else sendAct("hit");return;
     case "pass":if(A.host){doPass();}else sendAct("pass");return;
-    case "next":return A.host?nextTurn():sendAct("next");
+    case "finish1":A.confirmEnd=true;return render();
+    case "keep":A.confirmEnd=false;return render();
     case "finish":return finishNow();
     case "again":return playAgain();
   }
@@ -649,8 +649,9 @@ function vHome(){
     +'<details class="how"><summary>Como funciona</summary><ol>'
     +'<li>Uma pessoa é sorteada para adivinhar e não vê a palavra.</li>'
     +'<li>Os outros veem a palavra e dão dicas falando, imitando ou cantarolando. Não vale dizer a palavra nem soletrar.</li>'
-    +'<li>Quando a pessoa acerta, alguém toca em Acertou. Se estiver impossível, toque em Passa.</li>'
-    +'<li>Cada acerto vale 1 ponto para quem adivinha. Todo mundo adivinha na sua vez e vence quem somar mais.</li>'
+    +'<li>Quando a pessoa acerta, alguém toca em Acertou. Ela ganha 1 ponto e a vez passa para o próximo.</li>'
+    +'<li>Se a palavra estiver impossível, toque em Passa para trocar. A vez continua com a mesma pessoa.</li>'
+    +'<li>O rodízio segue até o dono da sala finalizar e mostrar o placar.</li>'
     +'<li>Neste celular: coloque o aparelho na testa com a tela virada para o grupo.</li></ol></details>';
 }
 function vThemes(){
@@ -703,20 +704,15 @@ function vSettings(S2){
   if(!A.host){
     var c=S2.cfg||{};
     return '<div class="panel"><h3>Configuração da partida</h3><p><b>Temas:</b> '+(c.th&&c.th.length?esc(c.th.join(", ")):"nenhum escolhido ainda")+'</p>'
-      +'<p><b>Tempo:</b> '+(c.t||60)+' segundos por vez</p><p><b>Rodadas:</b> cada pessoa adivinha '+(c.r||2)+' '+plural(c.r||2,"vez","vezes")+'</p>'
       +'<p><b>Passar:</b> '+(c.pg?"só quem adivinha":"qualquer pessoa")+'</p></div>';
   }
   var T=allThemes();
   function on(id){return A.cfg.th.indexOf(id)>=0;}
   var chips=T.map(function(t){return '<button class="chip'+(on(t.id)?" on":"")+'" data-a="th" data-id="'+esc(t.id)+'" aria-pressed="'+on(t.id)+'">'+esc(t.name)+'<small>'+t.words.length+'</small></button>';}).join("");
   if(A.mode==="online"){chips+='<button class="chip'+(on("crowd")?" on":"")+'" data-a="th" data-id="crowd" aria-pressed="'+on("crowd")+'">Palavras da galera<small>'+(S2.cw||0)+'</small></button>';}
-  var times=[45,60,90,120].map(function(v){return '<button class="chip'+(A.cfg.t===v?" on":"")+'" data-a="time" data-v="'+v+'" aria-pressed="'+(A.cfg.t===v)+'">'+v+'s</button>';}).join("");
-  var rounds=[1,2,3,4].map(function(v){return '<button class="chip'+(A.cfg.r===v?" on":"")+'" data-a="rounds" data-v="'+v+'" aria-pressed="'+(A.cfg.r===v)+'">'+v+'x</button>';}).join("");
   var total=buildPool().length;
   return '<div class="panel"><div class="trow"><h3>Temas</h3><span class="row"><button class="btn sm ghost" data-a="thall">Todos</button><button class="btn sm ghost" data-a="thnone">Limpar</button></span></div>'
     +'<div class="chips">'+chips+'</div><p class="muted">'+total+' '+plural(total,"palavra","palavras")+' no jogo. <button class="btn link" style="display:inline;min-height:0;padding:0" data-a="themes">Criar tema próprio</button></p>'
-    +'<h3>Tempo por vez</h3><div class="seg">'+times+'</div>'
-    +'<h3>Vezes que cada pessoa adivinha</h3><div class="seg">'+rounds+'</div>'
     +'<label class="switch"><input type="checkbox" data-a="pg"'+(A.cfg.pg?" checked":"")+'> Só quem adivinha pode passar</label></div>';
 }
 function vLobby(S2){
@@ -731,21 +727,23 @@ function vLobby(S2){
 function strip(S2){
   return '<div class="score-strip">'+(S2.pl||[]).map(function(p){return '<span class="s'+(p[0]===S2.g?" g":"")+'">'+av(p[2],p[1])+esc(p[1])+' <i>'+p[3]+'</i></span>';}).join("")+'</div>';
 }
-function vReady(S2){
-  var gname=esc(pname(S2,S2.g)),isG=A.mode==="online"&&S2.g===UID,local=A.mode==="local";
-  var body,btn="";
-  if(isG){body='<h2>Sua vez de adivinhar</h2><p class="lead">Você não vai ver a palavra. Seus amigos veem e dão as dicas. Quando estiver pronto, toque abaixo.</p>';btn='<button class="btn xl" data-a="start">Estou pronto</button>';}
-  else if(local){body='<h2>Vez de '+gname+'</h2><p class="lead">Coloque o celular na testa com a tela virada para o grupo. Quando todos estiverem prontos, toque em Começar.</p>';btn='<button class="btn xl" data-a="start">Começar</button>';}
-  else{body='<h2>Vez de '+gname+'</h2><p class="lead">Prepare as dicas: você vai ver a palavra e '+gname+' não. Não vale dizer a palavra nem soletrar.</p>'+(A.host?'<button class="btn xl" data-a="start">Começar agora</button>':'<p class="muted">Aguardando '+gname+' ficar pronto…</p>');}
-  return '<div class="panel"><h3>Vez '+(S2.ti+1)+' de '+S2.tt+'</h3>'+body+btn+'</div>'+strip(S2);
-}
-function vCd(S2){return '<div class="panel center"><h3>Prepare-se, '+esc(pname(S2,S2.g))+'</h3><div class="big" aria-live="assertive">'+S2.cd+'</div></div>';}
 function sizeCls(w){var n=w.length;return n<=9?"s1":n<=16?"s2":n<=26?"s3":"s4";}
-function timerHtml(){return '<div class="timer" aria-label="Tempo restante"><svg viewBox="0 0 72 72" aria-hidden="true"><circle class="track" cx="36" cy="36" r="30"/><circle id="ring" class="prog" cx="36" cy="36" r="30" stroke-dasharray="188.5" stroke-dashoffset="0" transform="rotate(-90 36 36)"/></svg><span id="tm">0</span></div>';}
+function finishBox(){
+  if(!A.host)return "";
+  if(A.confirmEnd)return '<div class="panel"><p><b>Encerrar a partida e mostrar o placar?</b></p><div class="acts one"><button class="btn" data-a="finish">Sim, finalizar</button><button class="btn ghost" data-a="keep">Continuar jogando</button></div></div>';
+  return '<button class="btn ghost" data-a="finish1">Finalizar partida</button>';
+}
+function vReady(S2){
+  var gname=esc(pname(S2,S2.g));
+  return (S2.lm?'<div class="banner ok" role="status">'+esc(S2.lm)+'</div>':"")
+    +'<div class="panel"><h3>Próxima vez</h3><h2>Vez de '+gname+'</h2><p class="lead">Passe o celular para '+gname+' e coloque na testa com a tela virada para o grupo. Quando todos estiverem prontos, toque em Começar.</p><button class="btn xl" data-a="start">Começar</button></div>'
+    +strip(S2)+finishBox();
+}
 function vPlay(S2){
   var isG=A.mode==="online"&&S2.g===UID,gname=esc(pname(S2,S2.g));
   var fl=S2.lf===1?" flash-hit":S2.lf===0?" flash-miss":"";
-  var head='<div class="status">'+timerHtml()+'<div class="who"><h3>Adivinhando</h3><b>'+gname+'</b><p class="muted">'+S2.ts+' '+plural(S2.ts,"acerto","acertos")+' nesta vez</p></div></div>';
+  var head=(S2.lm?'<div class="banner ok" role="status">'+esc(S2.lm)+'</div>':"")
+    +'<div class="status"><div class="who"><h3>Vez de adivinhar</h3><b>'+(isG?"Sua vez!":gname)+'</b></div></div>';
   var main;
   if(isG){
     main='<div class="card q'+fl+'"><span class="cat">'+esc(S2.wt)+'</span><div class="word" aria-label="Palavra escondida">?</div><p class="hint">Seus amigos estão vendo a palavra. Faça perguntas e arrisque!</p></div>'
@@ -757,15 +755,7 @@ function vPlay(S2){
       +'<button class="btn pass xl" data-a="pass"'+((!S2.cfg.pg||A.mode==="local")?"":" disabled")+'>Passa</button></div>';
     if(S2.cfg.pg&&A.mode!=="local")main+='<p class="muted center">Nesta sala só quem adivinha pode passar.</p>';
   }
-  return head+main+strip(S2);
-}
-function vResult(S2){
-  var gname=esc(pname(S2,S2.g));
-  var h=(S2.h||[]).map(function(x){return '<li class="'+(x[1]?"y":"n")+'">'+esc(x[0])+'</li>';}).join("");
-  var last=S2.ti+1>=S2.tt;
-  var btns='<button class="btn xl" data-a="next">'+(last?"Ver o resultado":"Próxima vez")+'</button>'+(A.host&&!last?'<button class="btn ghost" data-a="finish">Encerrar o jogo</button>':"");
-  return '<div class="panel"><h3>Tempo esgotado</h3><h2>'+gname+' fez '+S2.ts+' '+plural(S2.ts,"ponto","pontos")+'</h2>'
-    +(h?'<ul class="hist">'+h+'</ul>':'<p class="muted">Nenhuma palavra nesta vez.</p>')+'</div>'+strip(S2)+btns;
+  return head+main+strip(S2)+finishBox();
 }
 function vEnd(S2){
   var pl=(S2.pl||[]).slice().sort(function(a,b){return b[3]-a[3];});
@@ -781,7 +771,7 @@ function vEnd(S2){
 function vGame(){
   var S2=A.st;
   if(!S2)return vTop()+'<div class="panel center"><p class="muted">Conectando à sala…</p></div>';
-  var body={lobby:vLobby,ready:vReady,cd:vCd,play:vPlay,result:vResult,end:vEnd}[S2.v];
+  var body={lobby:vLobby,ready:vReady,play:vPlay,end:vEnd}[S2.v];
   return vTop()+(body?body(S2):"");
 }
 function html(){
@@ -791,22 +781,11 @@ function html(){
   return vHome();
 }
 function viewKey(){
-  var st=null;if(A.st){st=Object.assign({},A.st);delete st.tl;}
-  return JSON.stringify([A.screen,A.mode,A.host,A.code,A.err,A.busy,A.conn,A.hostGone,A.confirmLeave,A.aw,A.cfg,A.local,A.my,A.R?1:2,A.edit&&A.edit.id,st]);
-}
-function updateDynamic(){
-  var s=A.st;if(!s)return;
-  var tm=$("#tm"),ring=$("#ring");
-  if(tm)tm.textContent=s.tl;
-  if(ring){
-    var tot=(s.cfg&&s.cfg.t)||60,f=Math.max(0,Math.min(1,s.tl/tot));
-    ring.style.strokeDashoffset=String(CIRC*(1-f));
-    ring.parentNode.parentNode.classList.toggle("low",s.tl<=10);
-  }
+  return JSON.stringify([A.screen,A.mode,A.host,A.code,A.err,A.busy,A.conn,A.hostGone,A.confirmLeave,A.confirmEnd,A.aw,A.cfg,A.local,A.my,A.R?1:2,A.edit&&A.edit.id,A.st]);
 }
 function render(){
   var key=viewKey();
-  if(key===A.lastKey){updateDynamic();return;}
+  if(key===A.lastKey)return;
   A.lastKey=key;
   var ae=document.activeElement,keep=null;
   if(ae&&ae.id&&root.contains(ae)&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"))keep={id:ae.id,v:ae.value,s:ae.selectionStart,e:ae.selectionEnd};
@@ -817,7 +796,6 @@ function render(){
     if(el){el.value=keep.v;el.focus();try{el.setSelectionRange(keep.s,keep.e);}catch(e){}}
   }
   window.scrollTo(0,sy);
-  updateDynamic();
 }
 
 /* ---------- Início ---------- */
